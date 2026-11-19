@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.ServiceProcess;
 using System.Text;
@@ -17,7 +18,8 @@ namespace DuckDNS2.Service
     }
 
     /// <summary>
-    /// Install / uninstall / start / stop of the DuckDNS2 Windows service (requires admin rights).
+    /// Install / uninstall / start / stop of the DuckDNS2 Windows service (requires admin rights)
+    /// Querying state / start type does not require admin.
     /// The service binary is this very same EXE (no arguments = service mode when started by the SCM).
     /// </summary>
     static class ServiceControl
@@ -40,9 +42,28 @@ namespace DuckDNS2.Service
                     }
                 }
             }
+            catch (InvalidOperationException ex)
+            {
+                // ERROR_SERVICE_DOES_NOT_EXIST; anything else (e.g. access denied) is not "not installed"
+                Win32Exception w = ex.InnerException as Win32Exception;
+                return w == null || w.NativeErrorCode == 1060 ? ServiceState.NotInstalled : ServiceState.Other;
+            }
+        }
+
+        /// <summary>
+        /// Start type of the installed service (Automatic also covers delayed start), null when not installed.
+        /// Like <see cref="GetState"/> this only needs query rights, which every interactive user has.
+        /// </summary>
+        public static ServiceStartMode? GetStartMode()
+        {
+            try
+            {
+                using (ServiceController sc = new ServiceController(AppPaths.ServiceName))
+                    return sc.StartType;
+            }
             catch (InvalidOperationException)
             {
-                return ServiceState.NotInstalled;
+                return null;
             }
         }
 

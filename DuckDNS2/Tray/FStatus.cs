@@ -57,13 +57,13 @@ namespace DuckDNS2.Tray
             Controls.AddRange(new Control[] { lblResult, lblDetails, txtMessages, btnUpdate, btnManager, btnClose });
         }
 
-        public void ShowStatus(UpdateStatus s, string error)
+        public void ShowStatus(UpdateStatus s, string error, ServiceView view)
         {
             if (s == null)
             {
-                lblResult.Text = "Service not reachable";
-                lblResult.ForeColor = StatusText.Bad;
-                lblDetails.Text = (error ?? "") + "\r\nInstall / start the service from the DuckDNS2 Manager.";
+                lblResult.Text = view != null ? view.Headline : "Connecting...";
+                lblResult.ForeColor = view == null || view.Busy ? StatusText.Busy : StatusText.Bad;
+                lblDetails.Text = view != null ? view.Detail : (error ?? "");
                 txtMessages.Text = "";
                 return;
             }

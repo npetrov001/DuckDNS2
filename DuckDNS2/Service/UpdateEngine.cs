@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Net.NetworkInformation;
 using System.Threading;
 using DuckDNS2.Ipc;
 
@@ -13,9 +14,19 @@ namespace DuckDNS2.Service
     {
         /// <summary>Delay of the first update after start (network may still be coming up at boot).</summary>
         private static readonly TimeSpan StartupDelay = TimeSpan.FromSeconds(10);
-        /// <summary>After a failure retry sooner than the interval (if the interval is longer).</summary>
-        private static readonly TimeSpan RetryOnFailure = TimeSpan.FromMinutes(5);
+        /// <summary>
+        /// After consecutive failures retry sooner than the interval (if the interval is longer):
+        /// 30s, 1m, 2m, then every 5m. Covers a network that is not ready yet right after boot.
+        /// </summary>
+        private static readonly TimeSpan[] FailureRetries =
+        {
+            TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2), TimeSpan.FromMinutes(5),
+        };
         private static readonly TimeSpan DefaultInterval = TimeSpan.FromMinutes(30);
+        /// <summary>Wait for the network to settle after an address change (they come in bursts).</summary>
+        private static readonly TimeSpan NetworkSettleDelay = TimeSpan.FromSeconds(15);
+        /// <summary>At most one network-triggered update per this period (virtual adapters can be noisy).</summary>
+        private static readonly TimeSpan NetworkUpdateMinGap = TimeSpan.FromMinutes(1);
 
         private readonly object cfgLock = new object();
         private readonly object updateLock = new object();
@@ -26,6 +37,12 @@ namespace DuckDNS2.Service
         private IpcServer ipc;
         private volatile bool stopped;
         private int pendingManual; // 1 when a manual update is queued
+        private int consecutiveFailures;
+        private Timer networkTimer;
+        private readonly object networkLock = new object();
+        private DateTime lastNetworkChangeUtc = DateTime.MinValue;
+        private DateTime lastNetworkUpdateUtc = DateTime.MinValue;
+        private DateTime lastAttemptStartUtc = DateTime.MinValue;
 
         public void Start()
         {
@@ -40,6 +57,9 @@ namespace DuckDNS2.Service
             timer = new Timer(_ => RunUpdate("scheduled"), null, Timeout.Infinite, Timeout.Infinite);
             Schedule(StartupDelay);
 
+            networkTimer = new Timer(_ => OnNetworkSettled(), null, Timeout.Infinite, Timeout.Infinite);
+            NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
+
             ipc = new IpcServer(HandleRequest);
             ipc.Start();
             Log.Info("Engine started v" + AppPaths.Version + ", config: " + AppPaths.ConfigFile);
@@ -48,6 +68,9 @@ namespace DuckDNS2.Service
         public void Stop()
         {
             stopped = true;
+            NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
+            try { networkTimer?.Dispose(); } catch { }
+            networkTimer = null;
             try { ipc?.Stop(); } catch { }
             ipc = null;
             try { timer?.Dispose(); } catch { }
@@ -130,6 +153,8 @@ namespace DuckDNS2.Service
 
                 lock (statusLock)
                     status.InProgress = true;
+                lock (networkLock)
+                    lastAttemptStartUtc = DateTime.UtcNow;
 
                 List<string> msgs = new List<string>();
                 try
@@ -157,14 +182,21 @@ namespace DuckDNS2.Service
                         status.FailureCount++;
                 }
 
-                if (ok)
-                    Log.Info("Update OK (" + reason + "): " + cfg.DomainSummary);
-                else
-                    Log.Error("Update FAILED (" + reason + "): " + string.Join(" | ", msgs));
-
                 TimeSpan next = CurrentInterval();
-                if (!ok && next > RetryOnFailure)
-                    next = RetryOnFailure;
+                if (ok)
+                {
+                    consecutiveFailures = 0;
+                    Log.Info("Update OK (" + reason + "): " + cfg.DomainSummary);
+                }
+                else
+                {
+                    consecutiveFailures++;
+                    TimeSpan retry = FailureRetries[Math.Min(consecutiveFailures, FailureRetries.Length) - 1];
+                    if (next > retry)
+                        next = retry;
+                    Log.Error("Update FAILED (" + reason + "): " + string.Join(" | ", msgs) +
+                        " - retry in " + FormatSpan(next));
+                }
                 Schedule(next);
             }
         }
@@ -181,6 +213,58 @@ namespace DuckDNS2.Service
             }
             ThreadPool.QueueUserWorkItem(_ => RunUpdate(reason));
         }
+
+        #region Network change
+
+        private void OnNetworkAddressChanged(object sender, EventArgs e)
+        {
+            if (stopped)
+                return;
+            lock (networkLock)
+            {
+                lastNetworkChangeUtc = DateTime.UtcNow;
+                try { networkTimer?.Change(NetworkSettleDelay, Timeout.InfiniteTimeSpan); }
+                catch (ObjectDisposedException) { }
+            }
+        }
+
+        /// <summary>Runs <see cref="NetworkSettleDelay"/> after the last address change of a burst.</summary>
+        private void OnNetworkSettled()
+        {
+            if (stopped)
+                return;
+            if (!NetworkInterface.GetIsNetworkAvailable())
+            {
+                Log.Info("Network changed: no network available, waiting for it to come back");
+                return;
+            }
+            lock (networkLock)
+            {
+                DateTime now = DateTime.UtcNow;
+                // an update that started after the change already sees the new network (a failed one retries anyway)
+                if (lastAttemptStartUtc >= lastNetworkChangeUtc)
+                    return;
+                TimeSpan sinceLast = now - lastNetworkUpdateUtc;
+                if (sinceLast < NetworkUpdateMinGap)
+                {
+                    try { networkTimer?.Change(NetworkUpdateMinGap - sinceLast, Timeout.InfiniteTimeSpan); }
+                    catch (ObjectDisposedException) { }
+                    return;
+                }
+                lastNetworkUpdateUtc = now;
+            }
+            Log.Info("Network changed: updating");
+            TriggerUpdate("network change");
+        }
+
+        private static string FormatSpan(TimeSpan t)
+        {
+            if (t.TotalMinutes < 1) return (int)t.TotalSeconds + "s";
+            if (t.TotalHours < 1) return (int)t.TotalMinutes + "m";
+            return t.TotalHours.ToString("0.#") + "h";
+        }
+
+        #endregion
 
         public UpdateStatus GetStatus()
         {
