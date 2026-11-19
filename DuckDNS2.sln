@@ -1,0 +1,25 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DuckDNS2", "DuckDNS2\DuckDNS2.csproj", "{A8A16398-7A9F-41E7-AFF8-6E2E31E601EC}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A8A16398-7A9F-41E7-AFF8-6E2E31E601EC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A8A16398-7A9F-41E7-AFF8-6E2E31E601EC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A8A16398-7A9F-41E7-AFF8-6E2E31E601EC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A8A16398-7A9F-41E7-AFF8-6E2E31E601EC}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {8C5A998A-71A5-42F3-977E-E3D4239F5F76}
+	EndGlobalSection
+EndGlobal
